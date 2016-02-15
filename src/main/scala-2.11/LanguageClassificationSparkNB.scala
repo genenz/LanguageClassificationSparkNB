@@ -17,6 +17,7 @@
   * 2) A string of either English, French or Spanish, which you want the program to classify
   *
   */
+  */
 
 import org.apache.spark.SparkConf
 import org.apache.spark.SparkContext
