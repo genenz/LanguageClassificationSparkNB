@@ -17,16 +17,14 @@
   * 2) A string of either English, French or Spanish, which you want the program to classify
   *
   */
-  */
 
 import org.apache.spark.SparkConf
 import org.apache.spark.SparkContext
 import org.apache.spark.mllib.classification.{NaiveBayes,NaiveBayesModel}
-import org.apache.spark.mllib.feature.HashingTF
+import org.apache.spark.mllib.feature.{IDF, IDFModel, HashingTF}
 import org.apache.spark.rdd.RDD
 import scala.collection.mutable.HashMap
 import org.apache.spark.mllib.regression.LabeledPoint
-import org.apache.spark.mllib.linalg.Vector
 
 object LanguageClassificationSparkNB {
 
@@ -38,6 +36,9 @@ object LanguageClassificationSparkNB {
    * Esp: "La Federación de Asociaciones de Padres de Alumnos (FAPAR) sostiene que la jornada partida es mejor que la continua y es el modelo que mejor garantiza la igualdad de oportunidades. FAPAR ha presentado varias alegaciones al borrador de la orden que regula la organización de tiempos escolares, que está ahora en periodo de exposición pública."
    */
   val stringToClassify = "The social media backlash was sparked by Australian woman Melliiee Hunter, after she published a post a few days ago including photographs of her 9-year-old son and his friend who were left burned following a day at the beach on Australia Day."
+  //val stringToClassify = "J'ai dit qu'il fallait que ce soit sur une période suffisamment significative, pour que ce soit crédible, si c'est sur un mois, ça ne sera pas regardé comme étant l'élément déterminant, surtout quand on connaît la fluctuation des statistiques. Donc ce sera sur une période plus longue."
+  //val stringToClassify = "La Federación de Asociaciones de Padres de Alumnos (FAPAR) sostiene que la jornada partida es mejor que la continua y es el modelo que mejor garantiza la igualdad de oportunidades. FAPAR ha presentado varias alegaciones al borrador de la orden que regula la organización de tiempos escolares, que está ahora en periodo de exposición pública."
+
 
   // Program Inputs
   val trainingSetLocation = "target/scala-2.11/resource_managed/main/training.txt"    // Location of the training set
@@ -55,29 +56,29 @@ object LanguageClassificationSparkNB {
     val cleanedRDD = cleanseDataset(sc.textFile(trainingSetLocation))
 
     // Train the Model
-    val model = trainModel(cleanedRDD)
+    val labelsRDD = cleanedRDD.map({ case (label, features) =>
+      registerLabel(label)
+    })  // Register every label that we seen
+
+    val tfRDD = cleanedRDD.map({case (label, features) => {
+      val tokenizedString = tokenize(features)
+      hashingTF.transform(tokenizedString)
+    }})
+    val idfModel = new IDF().fit(tfRDD)
+    val labeledPointRDD = labelsRDD.zip(tfRDD).map({case (label,tfVector) =>
+      LabeledPoint(label, idfModel.transform(tfVector))
+    })
+    val nbModel = NaiveBayes.train(labeledPointRDD, 1.0, "multinomial")
 
     // Run the prediction
-    println("Original String: " + stringToClassify + "\n" + "Predicted Language: " + invertLabel(model.predict(tokenizeAndVectorizeString(stringToClassify))))
-  }
-
-  // This takes a string and vectorizes it
-  def tokenizeAndVectorizeString(testString: String): Vector = {
-    val tokenizedString = tokenize(testString)
-    hashingTF.transform(tokenizedString)
-  }
-
-  def trainModel(thisRDD: RDD[(String, String)]): NaiveBayesModel = {
-    val labeledPointRDD = thisRDD.map({case (label, features) =>
-      val numerisedLabel = registerLabel(label)
-      val tfVector = tokenizeAndVectorizeString(features) // This takes a String and vectorizes.  HashingTF is a common method to vectorize text: https://spark.apache.org/docs/1.6.0/mllib-feature-extraction.html
-      LabeledPoint(numerisedLabel.toDouble, tfVector)
-    })
-    NaiveBayes.train(labeledPointRDD, 1.0, "multinomial")
+    val tokenizedString = tokenize(stringToClassify)
+    val tfVector = hashingTF.transform(tokenizedString)
+    val idfVector = idfModel.transform(tfVector)
+    println("Original String: " + stringToClassify + "\n" + "Predicted Language: " + invertLabel(nbModel.predict(idfVector)))
   }
 
   // Records the number of labels/languages we see.  In theory, it allows more than just the 3 languages (of course they'll have to be an alphabet-based language)
-  def registerLabel(label: String): Int = {
+  def registerLabel(label: String): Double = {
     if (labels.contains(label))
       labels(label)
     else {
@@ -85,12 +86,6 @@ object LanguageClassificationSparkNB {
       labelWordCount += 1
       (labelWordCount - 1)
     }
-  }
-
-  // Reverses the registerLabel
-  def invertLabel(num: Int): String = {
-    val inverseHash = labels.map(_.swap)
-    inverseHash(num)
   }
 
   // Reverses the registerLabel
